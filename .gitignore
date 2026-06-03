@@ -1,0 +1,15 @@
+# ignore video and logs
+*.mov
+.trash/
+logs/
+
+# ignore youtube credentials
+client_secrets.json
+request.token
+.env
+
+# ignore dust
+.DS_Store
+
+# ignore claude
+.claude
