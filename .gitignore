@@ -11,5 +11,5 @@ request.token
 # ignore dust
 .DS_Store
 
-# ignore claude
-.claude
+# ignore machine-specific claude settings
+.claude/settings.local.json

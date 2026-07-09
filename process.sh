@@ -45,6 +45,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SSTREADY="$SCRIPT_DIR/sstready"
 SST_UNCOPIED="$SSTREADY/.uncopied"
+SST_VOLUME_BASE="/Volumes/sst7-1/create/frankthetankjj"
 YTREADY="$SCRIPT_DIR/ytready"
 TRASH="$SCRIPT_DIR/.trash"
 LOG_DIR="$SCRIPT_DIR/logs"
@@ -55,6 +56,8 @@ RENAME_LEDGER="$LOG_DIR/${LOG_DATE}-renames.tsv"
 mkdir -p "$SSTREADY" "$SST_UNCOPIED" "$YTREADY" "$TRASH" "$LOG_DIR"
 touch "$RENAME_LEDGER"
 
+# CONFIGURE: Set GPS coordinates for each gym location and detection radius.
+# Add or remove GPS_LOC_* pairs to match your locations; use Google Maps to get lat/lon.
 # Gym coordinates for GPS auto-detection (plus codes: HM8R+M2 SanMateo, 9473+Q4 SanJose)
 GPS_10PSM_LAT=37.5666; GPS_10PSM_LON=-122.3102
 GPS_10PSJ_LAT=37.3644; GPS_10PSJ_LON=-121.8973
@@ -62,7 +65,7 @@ GPS_RADIUS_KM=1.0
 
 # --- Upload state: daily quota management ---
 UPLOAD_STATE="$LOG_DIR/${LOG_DATE}-upload-state.tsv"
-MAX_DAILY_UPLOADS="${YT_DAILY_LIMIT:-6}"
+MAX_DAILY_UPLOADS="${YT_DAILY_LIMIT:-30}"
 QUOTA_EXCEEDED=false
 touch "$UPLOAD_STATE"
 
@@ -165,9 +168,33 @@ move_to_trash() {
   mv "$file" "$dest"
 }
 
-# Returns 0 if file is readable, duration >= 60s, and audio presence matches want_audio ("yes"|"no")
+try_copy_to_volume() {
+  local file="$1"
+  local bname
+  bname=$(basename "$file")
+  local vol_subdir="rolling"
+  [[ "$bname" == *"teaching"* ]] && vol_subdir="teaching"
+  local dest_dir="$SST_VOLUME_BASE/$vol_subdir"
+
+  if [[ ! -d "$SST_VOLUME_BASE" ]]; then
+    echo "  [volume] Drive not mounted — $bname stays in .uncopied/ for next run"
+    return 1
+  fi
+
+  mkdir -p "$dest_dir"
+  if cp "$file" "$dest_dir/$bname"; then
+    echo "  [volume] Copied to $dest_dir/$bname"
+    return 0
+  else
+    echo "  [volume] Copy failed — $bname stays in .uncopied/ for next run"
+    return 1
+  fi
+}
+
+# Returns 0 if file is readable, duration >= 60s, audio presence matches want_audio ("yes"|"no"),
+# output duration is within 5% of input_dur (optional), and full decode scan finds no errors.
 verify_output() {
-  local f="$1" want_audio="$2"
+  local f="$1" want_audio="$2" input_dur="${3:-}"
   local dur has_audio
   dur=$(ffprobe -v error -show_entries format=duration \
         -of default=noprint_wrappers=1:nokey=1 "$f" 2>/dev/null)
@@ -175,11 +202,21 @@ verify_output() {
   # Truncate to integer seconds (bash can't do float comparison)
   local dur_secs="${dur%%.*}"
   [[ "${dur_secs:-0}" -lt 60 ]] && return 1
+  # If input duration provided, verify output is within 5% (catches truncated encodes)
+  if [[ -n "$input_dur" && "$input_dur" != "N/A" ]]; then
+    local in_secs="${input_dur%%.*}"
+    local min_secs=$(( in_secs * 95 / 100 ))
+    [[ "${dur_secs:-0}" -lt "$min_secs" ]] && return 1
+  fi
   has_audio=$(ffprobe -v error -select_streams a:0 \
               -show_entries stream=codec_type \
               -of default=noprint_wrappers=1:nokey=1 "$f" 2>/dev/null)
   if [[ "$want_audio" == "yes" && -z "$has_audio" ]]; then return 1; fi
   if [[ "$want_audio" == "no"  && -n "$has_audio" ]]; then return 1; fi
+  # Full decode scan — catches codec errors and truncation that duration alone misses
+  local probe_errors
+  probe_errors=$(ffprobe -v error -f null -i "$f" 2>&1 || true)
+  [[ -n "$probe_errors" ]] && return 1
   return 0
 }
 
@@ -287,6 +324,9 @@ process_teaching_folder() {
         move_to_trash "$input_file"
         mv "$sst_out" "$SST_UNCOPIED/"
         log_rename "$sst_out" "$SST_UNCOPIED/$(basename "$sst_out")"
+        if try_copy_to_volume "$SST_UNCOPIED/$(basename "$sst_out")"; then
+          rm "$SST_UNCOPIED/$(basename "$sst_out")"
+        fi
       else
         echo "  [cleanup] Verification FAILED — source kept, sstready kept for inspection"
       fi
@@ -371,6 +411,20 @@ trap 'rm -f "$PIDFILE"' EXIT
 
 echo "starting | $(TZ=\"America/Los_Angeles\" date '+%Y-%m-%d %H:%M %Z') | pid: $$" > "$STATUS_FILE"
 
+# --- Retry flushing uncopied sstready files to external volume ---
+shopt -s nullglob
+_uncopied=("$SST_UNCOPIED"/*.mov)
+shopt -u nullglob
+if [[ ${#_uncopied[@]} -gt 0 ]]; then
+  echo "=== Retrying ${#_uncopied[@]} uncopied file(s) to volume ==="
+  for _f in "${_uncopied[@]}"; do
+    if try_copy_to_volume "$_f"; then
+      rm "$_f"
+    fi
+  done
+fi
+unset _uncopied _f
+
 command -v ffmpeg >/dev/null 2>&1 || { echo "ffmpeg not found"; exit 1; }
 command -v ffprobe >/dev/null 2>&1 || { echo "ffprobe not found"; exit 1; }
 command -v youtubeuploader >/dev/null 2>&1 || { echo "youtubeuploader not found"; exit 1; }
@@ -382,7 +436,8 @@ YT_TOKEN="$SCRIPT_DIR/request.token"
 [[ -f "$YT_SECRETS" ]] || { echo "Missing $YT_SECRETS"; exit 1; }
 [[ -f "$YT_TOKEN" ]] || { echo "Missing $YT_TOKEN"; exit 1; }
 
-# Playlist IDs
+# CONFIGURE: Replace with your own YouTube playlist IDs.
+# Find these in YouTube Studio → Playlists → click a playlist → copy the list= param from the URL.
 PLAYLIST_TEACHING="PLqn-1QlUBKlCBo9J2Pc63uJL-YkgOMzf-"
 PLAYLIST_10PSJ="PLqn-1QlUBKlDGWyP6FKdvPui8W74wLB3m"
 PLAYLIST_10PSM="PLqn-1QlUBKlCyjUBDOYWXW1Wtw5SI4wNI"
@@ -529,19 +584,25 @@ for i in "${!FILE_LIST[@]}"; do
   echo "=== Processing: $filename ==="
   echo "  [rename] → ${canonical_base} (${loc})"
 
+  # Capture input duration once for verify_output tolerance checks
+  input_dur=$(ffprobe -v quiet -show_entries format=duration \
+    -of default=noprint_wrappers=1:nokey=1 "$input_file" 2>/dev/null || echo "")
+
   # --- Compress with audio → sstready ---
   sst_out="$SSTREADY/${canonical_base}.mov"
   if [[ -f "$sst_out" ]]; then
     echo "  [sstready] Already exists, skipping."
   else
     echo "  [sstready] Compressing with audio..."
+    # CONFIGURE: Adjust encoding settings to match your target quality/filesize tradeoff.
+    # CRF 23 = good quality; lower = better quality + larger file. scale=WxH sets output resolution.
     ffmpeg -y -loglevel error -hide_banner -nostats -i "$input_file" \
       -c:v libx264 -profile:v high -level 4.1 -preset veryfast -crf 23 \
       -vf "scale=1280:720,fps=30" \
       -b:v 8083k \
       -c:a aac -b:a 191k -ar 44100 \
       -movflags +faststart \
-      "$sst_out"
+      "$sst_out" || { rm -f "$sst_out"; echo "  [error] ffmpeg failed (sstready) — partial output removed"; exit 1; }
     echo "  [sstready] Done: $(du -h "$sst_out" | cut -f1)"
   fi
 
@@ -556,12 +617,14 @@ for i in "${!FILE_LIST[@]}"; do
     ffmpeg -y -loglevel error -hide_banner -nostats -i "$sst_out" \
       -c:v copy -an \
       -movflags +faststart \
-      "$yt_out"
+      "$yt_out" || { rm -f "$yt_out"; echo "  [error] ffmpeg failed (ytready) — partial output removed"; exit 1; }
     echo "  [ytready] Done: $(du -h "$yt_out" | cut -f1)"
   fi
 
   # --- Teaching video detection ---
   # Rule: create teaching copy only for GPS-detected 10psm videos on Mon/Wed/Fri ~6am.
+  # CONFIGURE: Change dow values (0=Sun,1=Mon,...,6=Sat) and total_min range (minutes since midnight UTC)
+  # to match your teaching schedule. Current window: 345-390 min = 5:45-6:30 AM PST.
   teaching_sst_out=""
   teaching_yt_out=""
   is_teaching_day=false
@@ -601,14 +664,14 @@ for i in "${!FILE_LIST[@]}"; do
     echo "  [verify] Checking conversion outputs..."
     verify_ok=true
 
-    if ! verify_output "$sst_out" "yes"; then
+    if ! verify_output "$sst_out" "yes" "$input_dur"; then
       echo "  [verify] FAIL: sstready corrupt or missing audio — $sst_out"
       verify_ok=false
     else
       echo "  [verify] OK: sstready has audio"
     fi
 
-    if ! verify_output "$yt_out" "no"; then
+    if ! verify_output "$yt_out" "no" "$input_dur"; then
       echo "  [verify] FAIL: ytready corrupt or unexpectedly has audio — $yt_out"
       verify_ok=false
     else
@@ -616,7 +679,7 @@ for i in "${!FILE_LIST[@]}"; do
     fi
 
     if [[ -n "$teaching_sst_out" && -f "$teaching_sst_out" ]]; then
-      if ! verify_output "$teaching_sst_out" "yes"; then
+      if ! verify_output "$teaching_sst_out" "yes" "$input_dur"; then
         echo "  [verify] FAIL: teaching sstready corrupt or missing audio — $teaching_sst_out"
         verify_ok=false
       else
@@ -630,9 +693,15 @@ for i in "${!FILE_LIST[@]}"; do
       log_rename "$input_file" "$TRASH/$(basename "$input_file")"
       mv "$sst_out" "$SST_UNCOPIED/"
       log_rename "$sst_out" "$SST_UNCOPIED/$(basename "$sst_out")"
+      if try_copy_to_volume "$SST_UNCOPIED/$(basename "$sst_out")"; then
+        rm "$SST_UNCOPIED/$(basename "$sst_out")"
+      fi
       if [[ -n "$teaching_sst_out" && -f "$teaching_sst_out" ]]; then
         mv "$teaching_sst_out" "$SST_UNCOPIED/"
         log_rename "$teaching_sst_out" "$SST_UNCOPIED/$(basename "$teaching_sst_out")"
+        if try_copy_to_volume "$SST_UNCOPIED/$(basename "$teaching_sst_out")"; then
+          rm "$SST_UNCOPIED/$(basename "$teaching_sst_out")"
+        fi
       fi
     else
       echo "  [cleanup] Verification FAILED — source kept, skipping upload. Investigate outputs before retrying."
