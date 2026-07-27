@@ -64,7 +64,7 @@ GPS_10PSJ_LAT=37.3644; GPS_10PSJ_LON=-121.8973
 GPS_RADIUS_KM=1.0
 
 # --- Upload state: daily quota management ---
-UPLOAD_STATE="$LOG_DIR/${LOG_DATE}-upload-state.tsv"
+UPLOAD_STATE="$LOG_DIR/upload-state.tsv"
 MAX_DAILY_UPLOADS="${YT_DAILY_LIMIT:-30}"
 QUOTA_EXCEEDED=false
 touch "$UPLOAD_STATE"
@@ -214,9 +214,7 @@ verify_output() {
   if [[ "$want_audio" == "yes" && -z "$has_audio" ]]; then return 1; fi
   if [[ "$want_audio" == "no"  && -n "$has_audio" ]]; then return 1; fi
   # Full decode scan — catches codec errors and truncation that duration alone misses
-  local probe_errors
-  probe_errors=$(ffprobe -v error -f null -i "$f" 2>&1 || true)
-  [[ -n "$probe_errors" ]] && return 1
+  ffmpeg -v fatal -i "$f" -f null - 2>/dev/null || return 1
   return 0
 }
 
@@ -346,7 +344,7 @@ yt_upload() {
   # Skip if already recorded in state (any date)
   if already_uploaded "$bname"; then
     echo "  [upload] Already uploaded, skipping: $bname"
-    return 0
+    return 4
   fi
 
   # Enforce daily cap before attempting
@@ -395,6 +393,11 @@ EOF
   elif echo "$result" | grep -qi "quota\|quotaExceeded"; then
     echo "  [upload] QUOTA EXCEEDED — stopping uploads for today. Run again tomorrow."
     return 2
+  elif echo "$result" | grep -q "invalid_grant"; then
+    echo "  [upload] AUTH ERROR: YouTube OAuth token expired/revoked." >&2
+    echo "To fix: cd $SCRIPT_DIR && youtubeuploader -secrets client_secrets.json -token request.token" | \
+      mail -s "JJ Pipeline: YouTube auth failure — re-auth needed" mail@frank-chen.com
+    return 3
   else
     echo "  [upload] FAILED: $result"
     return 1
@@ -471,7 +474,10 @@ if $UPLOAD_ONLY; then
     yt_upload "$f" "$title" "$privacy" "$playlist" || upload_exit=$?
     if [[ $upload_exit -eq 0 ]]; then
       move_to_trash "$f"
-    elif [[ $upload_exit -eq 2 ]]; then
+    elif [[ $upload_exit -eq 4 ]]; then
+      rm "$f"
+      echo "  [cleanup] Stale ytready removed (already uploaded, prior .trash copy kept)"
+    elif [[ $upload_exit -eq 2 ]] || [[ $upload_exit -eq 3 ]]; then
       echo ""
       break
     fi
@@ -610,6 +616,8 @@ for i in "${!FILE_LIST[@]}"; do
   yt_out="$YTREADY/${canonical_base}-ytready.mov"
   if [[ -f "$yt_out" ]]; then
     echo "  [ytready] Already exists, skipping."
+  elif already_uploaded "${canonical_base}-ytready"; then
+    echo "  [ytready] Already uploaded — skipping re-creation."
   elif [[ ! -f "$sst_out" ]]; then
     echo "  [ytready] WARN: sstready missing, cannot create ytready."
   else
@@ -648,6 +656,8 @@ for i in "${!FILE_LIST[@]}"; do
 
     if [[ -f "$teaching_yt_out" ]]; then
       echo "  [teaching] YT already exists: $(basename "$teaching_yt_out")"
+    elif already_uploaded "${teaching_base}-ytready"; then
+      echo "  [teaching] YT already uploaded — skipping re-creation."
     else
       echo "  [teaching] 10psm Mon/Wed/Fri ~6am → creating YT $(basename "$teaching_yt_out")"
       cp "$yt_out" "$teaching_yt_out"
@@ -660,7 +670,25 @@ for i in "${!FILE_LIST[@]}"; do
   # --- Post-conversion verification + cleanup ---
   # Source only moves to .trash once ALL applicable outputs are verified non-corrupt
   # and have the correct audio presence (sst=audio, ytready=no audio).
-  if [[ -f "$sst_out" && -f "$yt_out" ]]; then
+  if already_uploaded "${canonical_base}-ytready" && [[ -f "$sst_out" ]]; then
+    echo "  [cleanup] ytready already uploaded — archiving source and sstready directly"
+    move_to_trash "$input_file"
+    log_rename "$input_file" "$TRASH/$(basename "$input_file")"
+    mv "$sst_out" "$SST_UNCOPIED/"
+    log_rename "$sst_out" "$SST_UNCOPIED/$(basename "$sst_out")"
+    if try_copy_to_volume "$SST_UNCOPIED/$(basename "$sst_out")"; then
+      rm "$SST_UNCOPIED/$(basename "$sst_out")"
+    fi
+    if [[ -n "$teaching_sst_out" && -f "$teaching_sst_out" ]]; then
+      mv "$teaching_sst_out" "$SST_UNCOPIED/"
+      log_rename "$teaching_sst_out" "$SST_UNCOPIED/$(basename "$teaching_sst_out")"
+      if try_copy_to_volume "$SST_UNCOPIED/$(basename "$teaching_sst_out")"; then
+        rm "$SST_UNCOPIED/$(basename "$teaching_sst_out")"
+      fi
+    fi
+    echo ""
+    continue
+  elif [[ -f "$sst_out" && -f "$yt_out" ]]; then
     echo "  [verify] Checking conversion outputs..."
     verify_ok=true
 
@@ -736,7 +764,7 @@ for i in "${!FILE_LIST[@]}"; do
 
   upload_exit=0
   yt_upload "$yt_out" "${canonical_base}-ytready" "unlisted" "$rolling_playlist" || upload_exit=$?
-  if [[ $upload_exit -eq 2 ]]; then
+  if [[ $upload_exit -eq 2 ]] || [[ $upload_exit -eq 3 ]]; then
     QUOTA_EXCEEDED=true
     echo ""
     continue
@@ -757,7 +785,7 @@ for i in "${!FILE_LIST[@]}"; do
     teaching_title="${teaching_title%-ytready}"
     upload_exit=0
     yt_upload "$teaching_yt_out" "$teaching_title" "public" "$PLAYLIST_TEACHING" || upload_exit=$?
-    if [[ $upload_exit -eq 2 ]]; then
+    if [[ $upload_exit -eq 2 ]] || [[ $upload_exit -eq 3 ]]; then
       QUOTA_EXCEEDED=true
     elif [[ $upload_exit -eq 0 ]]; then
       echo "  [trash] Moving uploaded teaching ytready to .trash/"
