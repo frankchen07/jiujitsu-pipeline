@@ -25,9 +25,10 @@ while IFS= read -r -d '' f; do
   bname=$(basename "$f")
   dest="$ROLLING/$bname"
 
-  # Skip files modified in the last 60 seconds — may still be mid-AirDrop
+  # Skip files modified in the last 60 seconds — may still be mid-AirDrop.
+  # A negative age means a future mtime (clock-skewed device) — not a transfer-in-progress.
   age=$(( $(date +%s) - $(stat -f %m "$f") ))
-  if [[ $age -lt 60 ]]; then
+  if [[ $age -ge 0 && $age -lt 60 ]]; then
     echo "  [skip-transferring] $bname (modified ${age}s ago)"
     log_ingest "skip-transferring" "$f" ""
     skipped_transferring=$(( skipped_transferring + 1 ))

@@ -68,6 +68,7 @@ UPLOAD_STATE="$LOG_DIR/upload-state.tsv"
 MAX_DAILY_UPLOADS="${YT_DAILY_LIMIT:-30}"
 QUOTA_EXCEEDED=false
 touch "$UPLOAD_STATE"
+AUTH_FLAG="$LOG_DIR/AUTH-FAILURE.flag"
 
 UPLOAD_ONLY=false
 CONVERT_ONLY=false
@@ -389,14 +390,15 @@ EOF
     echo "  [upload] Success! ID: ${vid} → https://studio.youtube.com/video/${vid}/edit"
     printf '%s\t%s\t%s\n' "$(TZ="America/Los_Angeles" date +%Y-%m-%d)" "$bname" "$vid" >> "$UPLOAD_STATE"
     echo "uploaded | $(TZ=\"America/Los_Angeles\" date '+%Y-%m-%d %H:%M %Z') | ${bname} | ${vid}" > "$PROGRESS_FILE"
+    rm -f "$AUTH_FLAG"
     return 0
   elif echo "$result" | grep -qi "quota\|quotaExceeded"; then
     echo "  [upload] QUOTA EXCEEDED — stopping uploads for today. Run again tomorrow."
     return 2
   elif echo "$result" | grep -q "invalid_grant"; then
     echo "  [upload] AUTH ERROR: YouTube OAuth token expired/revoked." >&2
-    echo "To fix: cd $SCRIPT_DIR && youtubeuploader -secrets client_secrets.json -token request.token" | \
-      mail -s "JJ Pipeline: YouTube auth failure — re-auth needed" mail@frank-chen.com
+    echo "$(TZ="America/Los_Angeles" date '+%Y-%m-%d %H:%M %Z') | YouTube OAuth token expired/revoked. Fix: cd $SCRIPT_DIR && youtubeuploader -secrets client_secrets.json -cache request.token" > "$AUTH_FLAG"
+    osascript -e 'display notification "Re-auth needed: cd jiujitsu-pipeline && youtubeuploader -secrets client_secrets.json -cache request.token" with title "JJ Pipeline: YouTube auth failure" sound name "Basso"' 2>/dev/null || true
     return 3
   else
     echo "  [upload] FAILED: $result"

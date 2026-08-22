@@ -13,12 +13,13 @@ Report the current state of all pipeline stages and what action is next.
 
 Steps:
 1. Source `pipeline.config`
-2. Count files in each stage folder: `$STAGE_SOURCE`, `$STAGE_ARCHIVE`, `$STAGE_DELIVER`, `$STAGE_TRASH`
-3. Read today's status log: `$LOG_DIR/$(date +$LOG_DATE_FORMAT)-process.status` — if it exists, show its value (starting/running/done/failed)
-4. Read today's upload state log: `$LOG_DIR/$(date +$LOG_DATE_FORMAT)-upload-state.tsv` — count lines to get today's publish count
-5. Read today's progress file: `$LOG_DIR/$(date +$LOG_DATE_FORMAT)-process.progress` — if it exists, show what's currently processing
-6. Output a one-liner: `"N raw → N transforming → N queued for publish (N/$PUBLISH_QUOTA today)"`
-7. Suggest the next logical action based on what's pending
+2. Check for `$LOG_DIR/AUTH-FAILURE.flag` — if present, report its contents prominently first (uploads are blocked until re-auth), before anything else
+3. Count files in each stage folder: `$STAGE_SOURCE`, `$STAGE_ARCHIVE`, `$STAGE_DELIVER`, `$STAGE_TRASH`
+4. Read today's status log: `$LOG_DIR/$(date +$LOG_DATE_FORMAT)-process.status` — if it exists, show its value (starting/running/done/failed)
+5. Read today's upload state log: `$LOG_DIR/$(date +$LOG_DATE_FORMAT)-upload-state.tsv` — count lines to get today's publish count
+6. Read today's progress file: `$LOG_DIR/$(date +$LOG_DATE_FORMAT)-process.progress` — if it exists, show what's currently processing
+7. Output a one-liner: `"N raw → N transforming → N queued for publish (N/$PUBLISH_QUOTA today)"`
+8. Suggest the next logical action based on what's pending
 
 ### `/run ingest`
 Move source files from the drop zone (e.g. ~/Downloads) into `$STAGE_SOURCE`.
