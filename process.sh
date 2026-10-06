@@ -397,8 +397,8 @@ EOF
     return 2
   elif echo "$result" | grep -q "invalid_grant"; then
     echo "  [upload] AUTH ERROR: YouTube OAuth token expired/revoked." >&2
-    echo "$(TZ="America/Los_Angeles" date '+%Y-%m-%d %H:%M %Z') | YouTube OAuth token expired/revoked. Fix: cd $SCRIPT_DIR && youtubeuploader -secrets client_secrets.json -cache request.token" > "$AUTH_FLAG"
-    osascript -e 'display notification "Re-auth needed: cd jiujitsu-pipeline && youtubeuploader -secrets client_secrets.json -cache request.token" with title "JJ Pipeline: YouTube auth failure" sound name "Basso"' 2>/dev/null || true
+    echo "$(TZ="America/Los_Angeles" date '+%Y-%m-%d %H:%M %Z') | YouTube OAuth token expired/revoked. Fix: cd $SCRIPT_DIR && rm request.token && echo junk > ~/dummy.mp4 && youtubeuploader -filename ~/dummy.mp4 -title test -privacy private (authorize in browser, ignore the 400, then rm ~/dummy.mp4)" > "$AUTH_FLAG"
+    osascript -e 'display notification "Re-auth needed: see logs/AUTH-FAILURE.flag for the command" with title "JJ Pipeline: YouTube auth failure" sound name "Basso"' 2>/dev/null || true
     return 3
   else
     echo "  [upload] FAILED: $result"

@@ -5,7 +5,7 @@ logs/
 
 # ignore youtube credentials
 client_secrets.json
-request.token
+request.token*
 .env
 
 # ignore dust
