@@ -298,8 +298,11 @@ process_teaching_folder() {
     if [[ -f "$yt_out" ]]; then
       echo "  [ytready] Already exists, skipping."
     elif [[ -f "$sst_out" ]]; then
-      echo "  [ytready] Copying audio archive to ytready naming..."
-      cp "$sst_out" "$yt_out"
+      echo "  [ytready] Copying audio archive to ytready naming (metadata stripped)..."
+      ffmpeg -y -loglevel error -hide_banner -nostats -i "$sst_out" \
+        -c copy -map_metadata -1 \
+        -movflags +faststart \
+        "$yt_out" || { rm -f "$yt_out"; echo "  [error] ffmpeg failed (ytready) — partial output removed"; exit 1; }
       log_rename "$sst_out" "$yt_out"
     fi
 
@@ -625,7 +628,7 @@ for i in "${!FILE_LIST[@]}"; do
   else
     echo "  [ytready] Stripping audio from sstready (stream copy)..."
     ffmpeg -y -loglevel error -hide_banner -nostats -i "$sst_out" \
-      -c:v copy -an \
+      -c:v copy -an -map_metadata -1 \
       -movflags +faststart \
       "$yt_out" || { rm -f "$yt_out"; echo "  [error] ffmpeg failed (ytready) — partial output removed"; exit 1; }
     echo "  [ytready] Done: $(du -h "$yt_out" | cut -f1)"
