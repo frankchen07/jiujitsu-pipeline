@@ -35,7 +35,8 @@ This is the most involved step. Do it once.
    # A browser window opens — sign in and authorize
    # This creates request.token in the current directory
    ```
-6. Both `client_secrets.json` and `request.token` are gitignored — never commit them
+6. If the token ever expires or is revoked, run `./reauth.sh` to redo the browser flow
+7. Both `client_secrets.json` and `request.token` are gitignored — never commit them
 
 ## Folder setup
 
